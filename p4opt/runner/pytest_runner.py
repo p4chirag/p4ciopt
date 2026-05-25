@@ -78,4 +78,14 @@ def run_pytest(
             except (json.JSONDecodeError, KeyError):
                 pass
 
+        # If pytest produced no outcomes (e.g. collection error), surface its
+        # output so users can see what went wrong instead of a silent "0 tests".
+        if not outcomes and proc.returncode != 0:
+            print("[p4opt] pytest reported no outcomes; raw output follows:",
+                  file=sys.stderr)
+            if proc.stdout:
+                print(proc.stdout, file=sys.stderr)
+            if proc.stderr:
+                print(proc.stderr, file=sys.stderr)
+
         return RunResult(outcomes=outcomes, wall_time_s=wall, exit_code=proc.returncode)

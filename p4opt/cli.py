@@ -218,6 +218,10 @@ def ci(
         None, "--pythonpath",
         help="Prepend this path to PYTHONPATH when running pytest (e.g. 'src' for projects that aren't pip-installed).",
     ),
+    pytest_arg: list[str] = typer.Option(
+        [], "--pytest-arg",
+        help="Extra arg to pass through to pytest (repeatable). Example: --pytest-arg=--override-ini=filterwarnings=",
+    ),
 ):
     """CI entry point: run smart subset, optionally compare against full suite.
 
@@ -243,12 +247,16 @@ def ci(
     all_tests = discover_tests(project)
 
     env_extra = {"PYTHONPATH": pythonpath} if pythonpath else None
+    extra_args = list(pytest_arg) if pytest_arg else None
 
     # --- Optional: full suite baseline ---
     full_result = None
     if compare:
         console.print("[bold]Running FULL suite for baseline…[/bold]")
-        full_result = run_pytest(project, test_targets=None, env_extra=env_extra)
+        full_result = run_pytest(
+            project, test_targets=None,
+            extra_args=extra_args, env_extra=env_extra,
+        )
         # Record the full run as well, so history captures it.
         record_run(conn, full_result, changeset_id=cs.id)
         conn.commit()
@@ -267,7 +275,10 @@ def ci(
         raise typer.Exit(code=0)
 
     console.print(f"[bold]Running {len(smart_targets)} smart-selected test file(s)…[/bold]")
-    smart_result = run_pytest(project, test_targets=smart_targets, env_extra=env_extra)
+    smart_result = run_pytest(
+        project, test_targets=smart_targets,
+        extra_args=extra_args, env_extra=env_extra,
+    )
     record_run(conn, smart_result, changeset_id=cs.id)
     conn.commit()
 
