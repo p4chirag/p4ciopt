@@ -15,8 +15,9 @@ env/
 *.db
 *.db-journal
 
-# Demo target (separate repo)
+# Demo targets (separate repos)
 click_demo/
+p4_plugin_demo/
 
 # Editor / OS
 .idea/

@@ -52,6 +52,33 @@ p4opt run    --vcs p4 --cl 12345 --project sample_project
 
 The P4 adapter shells out to `p4 describe -s <CL>` (or `p4 opened` for pending work). No P4Python required.
 
+## Real-world demo — jenkinsci/p4-plugin (Java/JUnit)
+
+P4CIOptimizer's path mapper also understands Java/JUnit conventions
+(`FooTest.java`, `TestFoo.java`, `FooIT.java`). For demos against large
+Java projects where running tests live would take too long, the `ci`
+command has a `--dry-run` mode that prints projected savings from a
+known baseline.
+
+```powershell
+# 1. Clone the target (jenkinsci/p4-plugin: ~58 min full Maven suite)
+git clone --depth 100 https://github.com/jenkinsci/p4-plugin.git p4_plugin_demo
+
+# 2. Run smart selection on a real recent commit
+p4opt select --vcs git --project p4_plugin_demo `
+  --from "0ea4b93~1" --to "0ea4b93" --explain
+# -> picks PerforceScmTest.java (1 of 27 test classes)
+
+# 3. Show the projected savings (full = ~58 min recorded baseline)
+p4opt ci --vcs git --project p4_plugin_demo `
+  --from "0ea4b93~1" --to "0ea4b93" `
+  --dry-run --baseline-s 3500
+# -> Saved ~55m47s (96%)
+```
+
+Use `--dry-run` for Java/Maven (and any other) targets where you have a
+known baseline but don't want p4opt to actually drive the test runner.
+
 ## Architecture
 
 ```
