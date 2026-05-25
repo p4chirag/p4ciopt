@@ -33,6 +33,18 @@ def _open_db(project_root: Path):
     return dbmod.connect(project_root)
 
 
+def _fmt_time(seconds: float) -> str:
+    """Human-readable duration: 3.2s, 45s, 3m12s, 1h05m."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    if seconds < 3600:
+        m, s = divmod(int(seconds), 60)
+        return f"{m}m{s:02d}s"
+    h, rem = divmod(int(seconds), 3600)
+    m = rem // 60
+    return f"{h}h{m:02d}m"
+
+
 def _resolve_changeset(vcs: str, ref_from: Optional[str], ref_to: Optional[str],
                        changelist: Optional[str], cwd: Optional[Path] = None):
     adapter = get_adapter(vcs)
@@ -222,6 +234,18 @@ def ci(
         [], "--pytest-arg",
         help="Extra arg to pass through to pytest (repeatable). Example: --pytest-arg=--override-ini=filterwarnings=",
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Skip executing pytest; print the selection + projected savings only. Use with --baseline-s.",
+    ),
+    baseline_s: float = typer.Option(
+        0.0, "--baseline-s",
+        help="Known full-suite wall time (seconds). Used by --dry-run; also overrides --compare's measured full time.",
+    ),
+    subset_estimate_s: float = typer.Option(
+        0.0, "--subset-estimate-s",
+        help="Estimated wall time for the smart subset (seconds). Default = baseline * (selected/total).",
+    ),
 ):
     """CI entry point: run smart subset, optionally compare against full suite.
 
@@ -248,6 +272,30 @@ def ci(
 
     env_extra = {"PYTHONPATH": pythonpath} if pythonpath else None
     extra_args = list(pytest_arg) if pytest_arg else None
+
+    # --- Dry-run: selection + projected savings only, no pytest execution. ---
+    if dry_run:
+        total = len(all_tests)
+        sel = len(smart_targets)
+        if baseline_s <= 0:
+            console.print("[yellow]--dry-run requires --baseline-s for a savings figure. Showing selection only.[/yellow]")
+            baseline_s_disp = 0.0
+            subset_disp = 0.0
+        else:
+            baseline_s_disp = baseline_s
+            subset_disp = subset_estimate_s if subset_estimate_s > 0 else (
+                baseline_s * (sel / total) if total else 0.0
+            )
+        saved = max(0.0, baseline_s_disp - subset_disp)
+        pct = (saved / baseline_s_disp * 100.0) if baseline_s_disp > 0 else 0.0
+        console.print(Panel.fit(
+            f"[bold]Full suite (recorded):[/bold]  {total} tests in {_fmt_time(baseline_s_disp)}\n"
+            f"[bold green]Smart subset (projected):[/bold green] {sel} test files in ~{_fmt_time(subset_disp)}\n"
+            f"[bold yellow]Saved ~{_fmt_time(saved)} ({pct:.0f}%)[/bold yellow]\n"
+            f"[dim]Dry run — no tests executed. Selection accuracy is real; timings are estimates.[/dim]",
+            title="Smart Selection (dry-run)", border_style="cyan",
+        ))
+        raise typer.Exit(code=0)
 
     # --- Optional: full suite baseline ---
     full_result = None

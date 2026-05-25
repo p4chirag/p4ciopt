@@ -1,11 +1,15 @@
 """Path-based mapping: changed source file -> candidate test files.
 
-Heuristics (highest score wins, capped at 1.0):
-  1. Exact stem match in tests dir:    src/foo.py -> tests/test_foo.py            (1.0)
-  2. Suffix match anywhere under tests/: any tests/**/test_foo.py                  (0.9)
-  3. Same module name appears in test:   src/foo.py imported/referenced by test   (0.7)  [path-stem fuzzy]
-  4. Test file is in same package dir:   src/pkg/foo.py -> tests/pkg/...           (0.5)
-  5. Test file itself was changed:                                                 (1.0)
+Supports both Python (pytest) and Java (JUnit/Maven) layouts:
+
+  Python:
+    src/foo.py            ->  tests/test_foo.py     (test_<stem>.py)
+    src/foo.py            ->  tests/foo_test.py     (<stem>_test.py)
+
+  Java/Maven:
+    src/main/java/.../Foo.java  ->  src/test/java/.../FooTest.java   (<Class>Test)
+    src/main/java/.../Foo.java  ->  src/test/java/.../FooIT.java     (integration)
+    src/main/java/.../Foo.java  ->  src/test/java/.../TestFoo.java   (Test<Class>)
 """
 from __future__ import annotations
 
@@ -13,33 +17,43 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 
-def discover_tests(project_root: Path) -> list[str]:
-    """Find pytest test files under common locations and return pytest-style ids.
+def _is_python_test(name: str) -> bool:
+    return name.startswith("test_") and name.endswith(".py") or name.endswith("_test.py")
 
-    Returns relative paths like 'tests/test_foo.py'. Real test-node ids (with ::)
-    are resolved later by the runner via `pytest --collect-only`.
-    """
+
+def _is_java_test(name: str) -> bool:
+    if not name.endswith(".java"):
+        return False
+    stem = name[:-5]  # drop '.java'
+    return stem.endswith("Test") or stem.endswith("IT") or stem.startswith("Test")
+
+
+def discover_tests(project_root: Path) -> list[str]:
+    """Find test files (Python + Java) and return paths relative to project_root."""
     project_root = Path(project_root)
     tests: list[str] = []
-    candidates = [
-        project_root / "tests",
-        project_root / "test",
-        project_root,
-    ]
     seen: set[Path] = set()
-    for base in candidates:
+
+    # Python: tests/, test/, project root
+    for base_name in ("tests", "test", "."):
+        base = project_root if base_name == "." else project_root / base_name
         if not base.exists():
             continue
-        for p in base.rglob("test_*.py"):
-            if p in seen:
-                continue
-            seen.add(p)
-            tests.append(str(p.relative_to(project_root)).replace("\\", "/"))
-        for p in base.rglob("*_test.py"):
-            if p in seen:
-                continue
-            seen.add(p)
-            tests.append(str(p.relative_to(project_root)).replace("\\", "/"))
+        for pattern in ("test_*.py", "*_test.py"):
+            for p in base.rglob(pattern):
+                if p in seen:
+                    continue
+                seen.add(p)
+                tests.append(str(p.relative_to(project_root)).replace("\\", "/"))
+
+    # Java/Maven: src/test/java/**
+    java_test_root = project_root / "src" / "test" / "java"
+    if java_test_root.exists():
+        for p in java_test_root.rglob("*.java"):
+            if _is_java_test(p.name) and p not in seen:
+                seen.add(p)
+                tests.append(str(p.relative_to(project_root)).replace("\\", "/"))
+
     return sorted(set(tests))
 
 
@@ -62,48 +76,99 @@ def _stem(path: str) -> str:
 
 def _is_test_file(path: str) -> bool:
     name = Path(path).name
-    return name.startswith("test_") or name.endswith("_test.py")
+    return _is_python_test(name) or _is_java_test(name)
 
 
-def _score_pair(changed: str, test_file: str) -> tuple[float, str]:
-    """Score one (changed_file, test_file) pair. Returns (score, reason)."""
-    if not changed.endswith(".py"):
-        return 0.0, ""
+def _java_package(path: str) -> str:
+    """Return the Java package path (parts after src/{main,test}/java/, no filename).
+    Returns '' if path isn't a Maven-layout Java file.
+    """
+    parts = _normalize(path).split("/")
+    for i in range(len(parts) - 1):
+        if parts[i] in ("main", "test") and i + 1 < len(parts) and parts[i + 1] == "java":
+            return "/".join(parts[i + 2:-1])
+    return ""
 
+
+def _score_pair_python(changed: str, test_file: str) -> tuple[float, str]:
+    """Python (pytest) scoring rules."""
     changed_norm = _normalize(changed)
     test_norm = _normalize(test_file)
     cstem = _stem(changed_norm)
     tstem = _stem(test_norm)
 
-    # The test file itself changed — definitely run it; do NOT cross-correlate
-    # other tests just because they share the tests/ folder.
     if changed_norm == test_norm:
         return 1.0, "test file changed"
-    if _is_test_file(changed_norm):
-        return 0.0, ""
+    if _is_python_test(Path(changed_norm).name):
+        return 0.0, ""  # test file changed but isn't the one being scored — don't cross-pollute
 
-    # tests/test_<stem>.py and src/<stem>.py
     expected = f"test_{cstem}"
     if tstem == expected:
-        # Bonus if dir structure mirrors:
         if Path(changed_norm).parent.name in Path(test_norm).parts:
             return 1.0, "exact stem + dir match"
         return 0.95, "exact stem match"
 
-    # <stem>_test.py form
     if tstem == f"{cstem}_test":
         return 0.9, "stem suffix match"
 
-    # Fuzzy match on stems (handles renames/typos)
     ratio = SequenceMatcher(None, cstem, tstem.replace("test_", "").replace("_test", "")).ratio()
     if ratio >= 0.75:
         return 0.7 * ratio, f"fuzzy stem ({ratio:.2f})"
 
-    # Same package dir: src/pkg/foo.py & tests/pkg/test_anything.py
     cpkg = Path(changed_norm).parent.name
     if cpkg and cpkg not in ("src", "tests", "test") and cpkg in Path(test_norm).parts:
         return 0.5, f"same package '{cpkg}'"
 
+    return 0.0, ""
+
+
+def _score_pair_java(changed: str, test_file: str) -> tuple[float, str]:
+    """Java (JUnit/Maven) scoring rules."""
+    changed_norm = _normalize(changed)
+    test_norm = _normalize(test_file)
+    cstem = _stem(changed_norm)   # e.g. "PerforceScm"
+    tstem = _stem(test_norm)      # e.g. "PerforceScmTest"
+
+    if changed_norm == test_norm:
+        return 1.0, "test file changed"
+    if _is_java_test(Path(changed_norm).name):
+        return 0.0, ""
+
+    same_pkg = _java_package(changed_norm) == _java_package(test_norm) != ""
+
+    # <Class>Test.java for <Class>.java (Maven default)
+    if tstem == f"{cstem}Test":
+        return (1.0, "exact name + package (Test suffix)") if same_pkg else (0.95, "exact name (Test suffix)")
+    # <Class>IT.java (integration test)
+    if tstem == f"{cstem}IT":
+        return (1.0, "exact name + package (IT suffix)") if same_pkg else (0.9, "exact name (IT suffix)")
+    # Test<Class>.java prefix form
+    if tstem == f"Test{cstem}":
+        return (1.0, "exact name + package (Test prefix)") if same_pkg else (0.95, "exact name (Test prefix)")
+
+    # Fuzzy: compare cstem against the test stem with Test/IT stripped
+    test_base = tstem
+    for suffix in ("Test", "IT"):
+        if test_base.endswith(suffix):
+            test_base = test_base[: -len(suffix)]
+            break
+    if test_base.startswith("Test"):
+        test_base = test_base[4:]
+    ratio = SequenceMatcher(None, cstem, test_base).ratio()
+    if ratio >= 0.75:
+        return 0.7 * ratio, f"fuzzy name ({ratio:.2f})"
+
+    if same_pkg:
+        return 0.5, "same Java package"
+    return 0.0, ""
+
+
+def _score_pair(changed: str, test_file: str) -> tuple[float, str]:
+    """Dispatch to the language-appropriate scorer based on extension."""
+    if changed.endswith(".py") and test_file.endswith(".py"):
+        return _score_pair_python(changed, test_file)
+    if changed.endswith(".java") and test_file.endswith(".java"):
+        return _score_pair_java(changed, test_file)
     return 0.0, ""
 
 
