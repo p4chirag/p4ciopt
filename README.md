@@ -1,7 +1,7 @@
 # P4CIOptimizer — Test smarter, ship faster.
 
 A hackathon-ready tool that:
-1. **Selects only the relevant tests** for a code change (hybrid: path mapping + historical failure correlation).
+1. **Selects only the relevant tests** for a code change (hybrid: path mapping + static import-graph analysis + historical failure correlation).
 2. **Detects degrading tests** — silently-slowing, flaky, or chronically slow ones — over time.
 
 Works with **Perforce (P4)** changelists *and* **Git** refs.
@@ -54,27 +54,51 @@ The P4 adapter shells out to `p4 describe -s <CL>` (or `p4 opened` for pending w
 
 ## Real-world demo — jenkinsci/p4-plugin (Java/JUnit)
 
-P4CIOptimizer's path mapper also understands Java/JUnit conventions
-(`FooTest.java`, `TestFoo.java`, `FooIT.java`). For demos against large
-Java projects where running tests live would take too long, the `ci`
-command has a `--dry-run` mode that prints projected savings from a
+P4CIOptimizer's path mapper understands Java/JUnit conventions
+(`FooTest.java`, `TestFoo.java`, `FooIT.java`), and the import-graph
+signal parses Java `import` statements plus same-package class
+references. For demos against large Java projects where running tests
+live would take too long, `ci --dry-run` prints projected savings from a
 known baseline.
 
 ```powershell
-# 1. Clone the target (jenkinsci/p4-plugin: ~58 min full Maven suite)
+# Clone once
 git clone --depth 100 https://github.com/jenkinsci/p4-plugin.git p4_plugin_demo
-
-# 2. Run smart selection on a real recent commit
-p4opt select --vcs git --project p4_plugin_demo `
-  --from "0ea4b93~1" --to "0ea4b93" --explain
-# -> picks PerforceScmTest.java (1 of 27 test classes)
-
-# 3. Show the projected savings (full = ~58 min recorded baseline)
-p4opt ci --vcs git --project p4_plugin_demo `
-  --from "0ea4b93~1" --to "0ea4b93" `
-  --dry-run --baseline-s 3500
-# -> Saved ~55m47s (96%)
 ```
+
+### Scenario A — Isolated change (96% saved)
+
+A console-log cleanup in `ReviewNotifier.java`, a leaf utility class
+that only one test class has any import path to.
+
+```powershell
+p4opt ci --vcs git --project p4_plugin_demo `
+  --from "b10b3824a~1" --to "b10b3824a" `
+  --dry-run --baseline-s 3500
+# Smart subset: 1 of 23 test classes (ReviewImplTest)
+# Saved ~55m37s (96%) off a ~58 min Maven suite
+```
+
+### Scenario B — Foundational change (9% saved — and that's the point)
+
+A change to `PerforceScm.java`, the plugin's central class. 21 of 23 test
+classes have real import paths to it — 15 direct importers plus 6
+transitive paths through intermediate modules. Smart selection skips only
+the 2 tests that genuinely have no code path through PerforceScm.
+
+```powershell
+p4opt ci --vcs git --project p4_plugin_demo `
+  --from "0ea4b93a4~1" --to "0ea4b93a4" `
+  --dry-run --baseline-s 3500
+# Smart subset: 21 of 23 test classes
+# Saved ~5m04s (9%) off a ~58 min Maven suite
+```
+
+**Why both numbers matter.** Naive selectors give optimistic savings
+regardless of how central the changed file is, letting real regressions
+slip through. P4CIOptimizer tells you the truth — big wins when the
+change is isolated, conservative selection when it touches core code.
+The green check on the PR means something.
 
 Use `--dry-run` for Java/Maven (and any other) targets where you have a
 known baseline but don't want p4opt to actually drive the test runner.
@@ -84,7 +108,7 @@ known baseline but don't want p4opt to actually drive the test runner.
 ```
 CLI (Typer)
   ├── VCS adapter   (Git | P4)
-  ├── Selector      (path heuristics + historical correlation)
+  ├── Selector      (path heuristics + static import graph + historical correlation)
   ├── Runner        (pytest-json-report)
   ├── Monitor       (linear regression slope, p95, flake rate)
   └── Dashboard     (Streamlit, 3 pages)
