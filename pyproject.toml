@@ -20,6 +20,7 @@ dependencies = [
     "streamlit>=1.32",
     "plotly>=5.18",
     "pandas>=2.0",
+    "statsmodels>=0.14",
 ]
 
 [project.scripts]

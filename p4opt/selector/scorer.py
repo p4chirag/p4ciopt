@@ -79,7 +79,7 @@ def select_tests(
         if h > 0:
             reasons.append(f"historical correlation ({h:.2f})")
         if i_score > 0:
-            reasons.append(i_reason)
+            reasons.append(f"{i_reason} ({i_score:.2f})")
         scored.append(ScoredTest(test_id=test_id, score=combined, reasons=tuple(reasons)))
 
     scored.sort(key=lambda s: s.score, reverse=True)

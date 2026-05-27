@@ -35,7 +35,7 @@ python -m streamlit run p4opt\dashboard\app.py `
 
 1. **Dashboard** → http://localhost:8501  *(start on the **Test Health** page)*
 2. **PR with live CI run** → https://github.com/p4chirag/click_demo/pull/1
-3. **Workflow log w/ green banner** → https://github.com/p4chirag/click_demo/actions/runs/26435610040
+3. **Workflow log w/ green banner** → https://github.com/p4chirag/click_demo/actions/runs/26436674912
 4. **Tool source code** → https://github.com/p4chirag/p4ciopt  *(optional — show during Q&A)*
 
 ### Quick smoke test (~2 min before)
@@ -69,14 +69,25 @@ p4opt select --files src/auth.py --project sample_project --explain
 
 > *"I changed one file — `src/auth.py`. Out of 7 test files in this project, the selector picked one: `test_auth.py`, score 0.90. But look at WHY — three signals stacked: a path match (0.95), a historical correlation (0.73, because this test failed 75% of the time historically when auth.py changed), AND an import-graph signal (1.00, because the test directly imports the changed module). Three independent ways of saying 'yes, this is the one.'"*
 
-**Switch to the dashboard tab (Test Health).**
+**Switch to the dashboard tab — Test Health page.**
 
-> *"Beyond selection, p4opt also watches tests over time. This is the test-health view of the same project."*
+> *"Beyond test selection, p4opt watches tests over time. Three patterns it surfaces automatically: degrading runtime, slow tests, and flaky tests."*
 
-Point at the three baked-in patterns on screen:
-- *"This test — `test_database_query` — was 200ms a month ago, 850ms today. Nobody noticed in code review. We flagged it. Slope: +12ms/day, statistically significant."*
-- *"This one — `test_cache_invalidation` — passes 70% of the time. Classic flake. We flagged it."*
-- *"And on the History page, this heatmap shows that `auth.py` and `test_user_auth` light up together — every time auth.py changes, this specific test breaks. That's the correlation we used in the selection."*
+Point at the **three metric tiles** at the top of the page:
+
+> *"One degrading test, one slow test, two flaky tests in this project."*
+
+Scroll to the **Degrading tests** trend chart and point at it:
+
+> *"Look at this trend line — `test_database_query` was about 200 milliseconds a month ago, 850 milliseconds today. Roughly +11 milliseconds per day, with a p-value below 0.05. **This is statistically significant degradation that nobody noticed in code review.** We did."*
+
+Scroll to the **Flaky tests** panel:
+
+> *"And `test_cache_invalidation` passes only 70% of the time over the last 20 runs. Classic intermittent failure — flagged automatically."*
+
+**Switch pages: sidebar → History.**
+
+> *"One more thing. This heatmap shows, across all historical CI runs, which source files tend to break which tests. `auth.py` and `test_user_auth` light up together — every time auth.py changes, this specific test breaks. That's the historical-correlation signal we just saw in the selection — visualized."*
 
 ### Beat 3 — Real Java/Maven project, the honesty pitch (90s)
 
@@ -110,22 +121,26 @@ p4opt ci --vcs git --project p4_plugin_demo `
 
 **Switch to browser tab #2 (the PR).**
 
-> *"This isn't slideware. Here's a real PR on a public fork of pallets/click — the famous Click CLI library. Every push triggers our workflow."*
+> *"This isn't slideware. Here's a real PR on a public fork of pallets/click — the famous Click CLI library. Three files changed: the GitHub Actions workflow that wires in p4opt, a one-line gitignore, and an actual refactor — I renamed a local variable in `shell_completion.py` that was shadowing the function's parameter."*
 
-Scroll to the **Checks** tab, click into the workflow run.
+*(If a judge clicks "Files changed", that's the story: a real 3-line refactor in `shell_completion.py`, not a comment edit.)*
+
+Scroll to the **Checks** tab. There's **one check** — `smart-test ✅ pass`. Click it.
 
 **Switch to browser tab #3 (the workflow run banner).**
 
 Read the banner aloud:
 
 ```
-Full suite:    1657 tests in 8.30s   (passed=1631 failed=1)
-Smart subset:  156  tests in 0.55s   (passed=156 failed=0)
-Saved 7.7s (93%)
+Full suite:    1657 tests in 8.18s   (passed=1631 failed=1)
+Smart subset:  156  tests in 0.54s   (passed=156 failed=0)
+Saved 7.6s (93%)
 Discovered test files: 21  |  Smart-selected: 5
 ```
 
-> *"GitHub Actions runner installs p4opt straight from the public repo. Runs against the PR's actual base..head diff. **No mocks. No slides. Real CI.**"*
+> *"GitHub Actions runner installs p4opt straight from the public repo. Runs against the PR's actual base..head diff. Picks 5 of 21 test files because those are the ones with import paths into `shell_completion`. **No mocks. No slides. Real CI.**"*
+
+*Note: the 1 failure in the full suite is a pre-existing Click-internal test issue; smart selection correctly excludes it because our change doesn't touch that code path. Use this as a bonus point if a judge asks.*
 
 ### Beat 5 — The Perforce angle (15s)
 
@@ -175,6 +190,12 @@ p4opt ci --vcs p4 --cl 12345 --project . --compare
 **Judge: "What's the false-negative rate?"**
 → *"For path-matching alone: high — we miss transitive coupling. With the import graph: low for direct dependencies, can still miss reflection / dynamic-import cases. History fixes those over time. Stretch goal we didn't ship: coverage-map mode — that gets you to near-zero false negatives but needs a one-time training run."*
 
+**Judge clicks "Files changed" on the PR: "What does this actually change?"**
+→ *"Three files: a 40-line workflow YAML that calls `p4opt ci --compare` on every PR, a 3-line gitignore for p4opt's local SQLite artifact, and a 3-line refactor in `shell_completion.py` — renaming a local variable to stop shadowing the function's `instruction` parameter. The kind of cleanup any code reviewer would suggest. Behavior-preserving."*
+
+**Judge: "Why is one full-suite test failing?"**
+→ *"That's a pre-existing Click test issue in their dev master — fails in the full suite, but our smart subset doesn't include it because our change has no import path to that test. **That's actually p4opt working as designed** — it insulates the PR's CI from unrelated flakes upstream."*
+
 ---
 
 ## Key URLs (in case you lose this file)
@@ -182,4 +203,4 @@ p4opt ci --vcs p4 --cl 12345 --project . --compare
 - Tool repo: https://github.com/p4chirag/p4ciopt
 - Click demo fork: https://github.com/p4chirag/click_demo
 - Demo PR: https://github.com/p4chirag/click_demo/pull/1
-- Green CI run: https://github.com/p4chirag/click_demo/actions/runs/26435610040
+- Green CI run: https://github.com/p4chirag/click_demo/actions/runs/26436674912

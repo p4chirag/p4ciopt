@@ -19,6 +19,24 @@ env/
 click_demo/
 p4_plugin_demo/
 
+# Demo/video artifacts (not part of the product)
+audio/
+input/
+input1/
+input2/
+input3/
+output/
+output-sora/
+output-sora1/
+output-sora2/
+recording/
+generate_sora.py
+generate_sora1.py
+scripts/generate_demo_audio.py
+scripts/make_section1_video.py
+scripts/make_section1_reveal.py
+DEMO_SCRIPT.md
+
 # Editor / OS
 .idea/
 .vscode/
